@@ -1,6 +1,10 @@
 # requirements.txt
+#streamlit
+#openai
+#pyttsx3
+#SpeechRecognition
+#python-dotenv
 streamlit
-openai
-pyttsx3
+openai>=1.0.0
 SpeechRecognition
 python-dotenv
