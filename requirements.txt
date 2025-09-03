@@ -1,0 +1,6 @@
+# requirements.txt
+streamlit
+openai
+pyttsx3
+SpeechRecognition
+python-dotenv
