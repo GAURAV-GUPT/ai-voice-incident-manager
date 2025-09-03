@@ -1,7 +1,6 @@
 # app.py
 import streamlit as st
 import openai
-import pyttsx3
 import speech_recognition as sr
 import threading
 import time
@@ -11,6 +10,8 @@ import os
 from dotenv import load_dotenv
 import base64
 import tempfile
+import queue
+import json
 
 # Load environment variables
 load_dotenv()
@@ -67,6 +68,21 @@ st.markdown("""
         border-radius: 0.5rem;
         padding: 1rem;
     }
+    .conversation-user {
+        background-color: #37474F;
+        color: white;
+        padding: 10px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        text-align: right;
+    }
+    .conversation-ai {
+        background-color: #0D47A1;
+        color: white;
+        padding: 10px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+    }
     @keyframes pulse {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.5; }
@@ -77,25 +93,33 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# JavaScript for browser TTS
+tts_js = """
+<script>
+function speakText(text) {
+    if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(utterance);
+        return true;
+    }
+    return false;
+}
+</script>
+"""
+
 class IncidentManagerAI:
     def __init__(self, openai_api_key):
         # Initialize OpenAI API
         openai.api_key = openai_api_key
         self.model = "gpt-4o-mini"
         
-        # Initialize text-to-speech engine
-        self.tts_engine = pyttsx3.init()
-        voices = self.tts_engine.getProperty('voices')
-        if voices:
-            self.tts_engine.setProperty('voice', voices[0].id)  # Use the first available voice
-        self.tts_engine.setProperty('rate', 180)  # Speed of speech
-        
         # Initialize speech recognition
         self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
+        self.microphone = None
         
-        # Adjust for ambient noise
+        # Try to initialize microphone (may not work in all environments)
         try:
+            self.microphone = sr.Microphone()
             with self.microphone as source:
                 self.recognizer.adjust_for_ambient_noise(source)
         except:
@@ -126,20 +150,25 @@ Structure your analysis with:
 
 Speak clearly and concisely. Remember you're in a voice conversation."""
 
-    def speak(self, text, wait=True):
-        """Convert text to speech"""
-        def speak_thread():
-            self.tts_engine.say(text)
-            self.tts_engine.runAndWait()
-            
-        if wait:
-            speak_thread()
-        else:
-            thread = threading.Thread(target=speak_thread)
-            thread.start()
-            
+    def speak(self, text):
+        """Use browser TTS via JavaScript"""
+        # Inject JavaScript for TTS
+        js_code = f"""
+        <script>
+            if ('speechSynthesis' in window) {{
+                const utterance = new SpeechSynthesisUtterance("{text.replace('"', '\\"')}");
+                window.speechSynthesis.speak(utterance);
+            }}
+        </script>
+        """
+        st.components.v1.html(js_code, height=0)
+        
     def listen(self, timeout=10, phrase_time_limit=5):
         """Listen for speech and convert to text"""
+        if not self.microphone:
+            st.session_state.status = "Microphone not available"
+            return ""
+            
         try:
             with self.microphone as source:
                 st.session_state.status = "Listening..."
@@ -170,7 +199,8 @@ Speak clearly and concisely. Remember you're in a voice conversation."""
         ]
         
         try:
-            response = openai.ChatCompletion.create(
+            # Use the updated OpenAI API
+            response = openai.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
@@ -330,7 +360,7 @@ def main():
                     st.warning("Please provide logs before submitting.")
         
         # Voice input button
-        if st.session_state.conversation_active:
+        if st.session_state.conversation_active and st.session_state.incident_ai.microphone:
             if st.button("🎤 Use Voice Input", use_container_width=True):
                 user_input = st.session_state.incident_ai.listen()
                 if user_input:
@@ -355,13 +385,13 @@ def main():
                 for i, msg in enumerate(st.session_state.conversation):
                     if msg["role"] == "AI":
                         st.markdown(f"""
-                        <div style="background-color: #0D47A1; color: white; padding: 10px; border-radius: 10px; margin-bottom: 10px;">
+                        <div class="conversation-ai">
                             <b>IncidentBot:</b> {msg["message"]}
                         </div>
                         """, unsafe_allow_html=True)
                     else:
                         st.markdown(f"""
-                        <div style="background-color: #37474F; color: white; padding: 10px; border-radius: 10px; margin-bottom: 10px; text-align: right;">
+                        <div class="conversation-user">
                             <b>You:</b> {msg["message"]}
                         </div>
                         """, unsafe_allow_html=True)
@@ -384,15 +414,18 @@ def main():
                 # Display formatted analysis
                 if "Root Cause Analysis" in analysis_text or "RCA" in analysis_text:
                     st.markdown("#### Root Cause Analysis (RCA)")
-                    st.info(extract_section(analysis_text, "Root Cause Analysis", "Proposed Fixes"))
+                    rca_text = extract_section(analysis_text, "Root Cause Analysis", "Proposed Fixes")
+                    st.info(rca_text if rca_text != "Not available" else analysis_text)
                 
                 if "Proposed Fixes" in analysis_text or "Fixes" in analysis_text:
                     st.markdown("#### Proposed Fixes")
-                    st.success(extract_section(analysis_text, "Proposed Fixes", "Preventative"))
+                    fixes_text = extract_section(analysis_text, "Proposed Fixes", "Preventative")
+                    st.success(fixes_text if fixes_text != "Not available" else analysis_text)
                 
                 if "Preventative" in analysis_text or "SOPs" in analysis_text:
                     st.markdown("#### Preventative SOPs")
-                    st.warning(extract_section(analysis_text, "Preventative", None))
+                    preventative_text = extract_section(analysis_text, "Preventative", None)
+                    st.warning(preventative_text if preventative_text != "Not available" else analysis_text)
             
             st.markdown('</div>', unsafe_allow_html=True)
     
@@ -400,6 +433,9 @@ def main():
     st.markdown("---")
     st.markdown("<p style='text-align: center; color: #B0BEC5;'>Powered by OpenAI GPT-4o mini and Streamlit</p>", 
                 unsafe_allow_html=True)
+    
+    # Add TTS JavaScript
+    st.components.v1.html(tts_js, height=0)
 
 def extract_section(text, start_label, end_label):
     """Extract a section from analysis text between labels"""
