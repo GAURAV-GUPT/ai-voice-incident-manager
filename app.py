@@ -265,17 +265,12 @@ if st.session_state.first_run:
 # --- Voice and Text Input Section ---
 if st.session_state.stage != "incident_resolved":
     st.write("---")
-    st.markdown("🎤 **Voice Input**")
-    
-    webrtc_ctx = webrtc_streamer(
-        key="audio-recorder",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioProcessor,
-        media_stream_constraints={"video": False, "audio": True},
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-    )
-
-    if st.button("Transcribe Last Spoken Words"):
+    text_prompt = st.chat_input("Type your response here...")
+    if text_prompt:
+        process_user_input(text_prompt)
+        st.rerun()
+        
+     if st.button("Transcribe Last Spoken Words"):
         st.session_state.transcribe_clicked = True
         
     if st.session_state.transcribe_clicked:
