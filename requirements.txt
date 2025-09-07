@@ -2,6 +2,5 @@ streamlit
 openai
 pandas
 graphviz
-#st-audiorec
-#streamlit-audiorecorder
-streamlit-audio-recorder
+streamlit-webrtc
+pydub
