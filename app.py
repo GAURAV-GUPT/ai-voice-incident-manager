@@ -7,6 +7,7 @@ import queue
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 from pydub import AudioSegment
 import io
+import av
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -59,23 +60,20 @@ except Exception:
     st.error("OpenAI API key not found. Please add it to your Streamlit secrets.", icon="🚨")
     st.stop()
     
-webrtc_ctx = None
-if "webrtc_ctx" in st.session_state:
-    webrtc_ctx = st.session_state.webrtc_ctx
-
-audio_buffer = queue.Queue()
+# Initialize audio buffer
+if "audio_buffer" not in st.session_state:
+    st.session_state.audio_buffer = queue.Queue()
 
 class AudioProcessor(AudioProcessorBase):
-    def recv(self, frame):
-        # We need to convert the AudioFrame to a format pydub can handle
-        # The frame data is raw bytes. We assume it's 16-bit PCM, 1 channel, 48kHz sample rate
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        # Convert audio frame to pydub AudioSegment
         sound = AudioSegment(
             data=frame.to_ndarray().tobytes(),
-            sample_width=frame.format.bytes_per_sample,
+            sample_width=frame.format.bytes,
             frame_rate=frame.sample_rate,
             channels=len(frame.layout.channels),
         )
-        audio_buffer.put(sound)
+        st.session_state.audio_buffer.put(sound)
         return frame
 
 # --- Session State Initialization ---
@@ -94,6 +92,8 @@ def init_session_state():
         st.session_state.first_run = True
     if "user_input" not in st.session_state:
         st.session_state.user_input = None
+    if "transcribe_clicked" not in st.session_state:
+        st.session_state.transcribe_clicked = False
 
 init_session_state()
 
@@ -122,10 +122,17 @@ def text_to_speech(text):
 
 def speech_to_text(audio_bytes):
     try:
-        with open("temp_audio.wav", "wb") as f:
-            f.write(audio_bytes)
-        with open("temp_audio.wav", "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_file)
+        with io.BytesIO() as buffer:
+            # Write audio bytes to buffer
+            buffer.write(audio_bytes)
+            buffer.seek(0)
+            # Create a temporary file in memory
+            audio_file = io.BytesIO(buffer.read())
+            audio_file.name = "audio.wav"
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file
+            )
         return transcript.text
     except Exception as e:
         st.error(f"Error in speech-to-text conversion: {e}", icon="🚨")
@@ -140,7 +147,7 @@ def add_message(agent_name, text, play_audio=True):
             audio_html = f'<audio autoplay><source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3"></audio>'
             st.markdown(audio_html, unsafe_allow_html=True)
 
-# --- Agent Logic (Unchanged) ---
+# --- Agent Logic ---
 def agent_1_triage():
     system_prompt = "You are Agent 1, the incident triage manager. Welcome the user to the Major Incident bridge and ask them to specify which application is having issues by name from the CMDB list."
     user_prompt = "The user has just joined the call. Please provide a welcome message."
@@ -161,7 +168,6 @@ def agent_2_cmdb_lookup(app_name):
     with st.spinner("Agent 2 is analyzing CMDB..."):
         response = get_ai_response(system_prompt, user_prompt)
         add_message("Agent 2", response)
-    st.rerun()
 
 def agent_3_log_analysis():
     st.session_state.stage = "rca_generation"
@@ -171,7 +177,6 @@ def agent_3_log_analysis():
         response = get_ai_response(system_prompt, user_prompt)
         st.session_state.log_summary = response
         add_message("Agent 3", response)
-    st.rerun()
 
 def agent_4_rca_and_fix():
     st.session_state.stage = "incident_resolved"
@@ -181,7 +186,6 @@ def agent_4_rca_and_fix():
         response = get_ai_response(system_prompt, user_prompt)
         st.session_state.rca_report = response
         add_message("Agent 4", "I have completed the analysis and generated the final report. This incident bridge can now be closed.")
-    st.rerun()
 
 def agent_5_qa(query):
     context = f"""
@@ -229,13 +233,10 @@ def process_user_input(prompt):
     if not prompt:
         return
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
     if st.session_state.stage == "app_selection":
         agent_2_cmdb_lookup(prompt)
     else:
         agent_5_qa(prompt)
-        st.rerun()
 
 st.title("🗣️ AI Major Incident Manager")
 col1, col2 = st.columns([2, 1])
@@ -260,7 +261,6 @@ with col2:
 # Initial welcome message
 if st.session_state.first_run:
     agent_1_triage()
-    st.rerun()
 
 # --- Voice and Text Input Section ---
 if st.session_state.stage != "incident_resolved":
@@ -272,25 +272,31 @@ if st.session_state.stage != "incident_resolved":
         mode=WebRtcMode.SENDONLY,
         audio_processor_factory=AudioProcessor,
         media_stream_constraints={"video": False, "audio": True},
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
     )
 
-    if webrtc_ctx.state.playing:
-        st.session_state.webrtc_ctx = webrtc_ctx
-        if st.button("Transcribe Last Spoken Words"):
-            if not audio_buffer.empty():
-                combined_audio = AudioSegment.empty()
-                while not audio_buffer.empty():
-                    combined_audio += audio_buffer.get()
-                
-                if len(combined_audio) > 0:
-                    buffer = io.BytesIO()
-                    combined_audio.export(buffer, format="wav")
-                    buffer.seek(0)
-                    with st.spinner("Transcribing your voice..."):
-                        st.session_state.user_input = speech_to_text(buffer.read())
-                        st.rerun()
-            else:
-                st.warning("Audio buffer is empty. Speak into the microphone first.")
+    if st.button("Transcribe Last Spoken Words"):
+        st.session_state.transcribe_clicked = True
+        
+    if st.session_state.transcribe_clicked:
+        if not st.session_state.audio_buffer.empty():
+            combined_audio = AudioSegment.empty()
+            while not st.session_state.audio_buffer.empty():
+                try:
+                    combined_audio += st.session_state.audio_buffer.get_nowait()
+                except queue.Empty:
+                    break
+            
+            if len(combined_audio) > 0:
+                buffer = io.BytesIO()
+                combined_audio.export(buffer, format="wav")
+                buffer.seek(0)
+                with st.spinner("Transcribing your voice..."):
+                    st.session_state.user_input = speech_to_text(buffer.getvalue())
+                    st.session_state.transcribe_clicked = False
+        else:
+            st.warning("Audio buffer is empty. Speak into the microphone first.")
+            st.session_state.transcribe_clicked = False
 
     # Process text from either voice transcription or text input
     text_prompt = st.chat_input("Or type your response here...")
@@ -298,9 +304,10 @@ if st.session_state.stage != "incident_resolved":
     final_prompt = None
     if text_prompt:
         final_prompt = text_prompt
-    elif st.session_state.user_input:
+    elif st.session_state.get('user_input'):
         final_prompt = st.session_state.user_input
         st.session_state.user_input = None  # Clear after processing
 
     if final_prompt:
         process_user_input(final_prompt)
+        st.rerun()
