@@ -1,10 +1,5 @@
-# requirements.txt
-#streamlit
-#openai
-#pyttsx3
-#SpeechRecognition
-#python-dotenv
 streamlit
-openai>=1.0.0
-SpeechRecognition
-python-dotenv
+openai
+pandas
+graphviz
+streamlit-audiorecorder
