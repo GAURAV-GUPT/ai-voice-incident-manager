@@ -2,4 +2,4 @@ streamlit
 openai
 pandas
 graphviz
-streamlit-audiorecorder
+st-audiorec
