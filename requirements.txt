@@ -3,4 +3,5 @@ openai
 pandas
 graphviz
 #st-audiorec
-streamlit-audiorecorder
+#streamlit-audiorecorder
+streamlit-audio-recorder
