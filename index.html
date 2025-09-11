@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Major Incident Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+        .container {
+            max-width: 90%;
+            height: 90vh;
+        }
+        .chat-area {
+            height: 60vh;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+        .message {
+            border-radius: 12px;
+            padding: 1rem;
+            max-width: 80%;
+            margin-bottom: 1rem;
+        }
+        .agent {
+            background-color: #2d3748;
+            border-bottom-left-radius: 0;
+        }
+        .user {
+            background-color: #4c51bf;
+            margin-left: auto;
+            border-bottom-right-radius: 0;
+        }
+        .agent-name {
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+            color: #a0aec0;
+        }
+        .card {
+            background-color: #2d3748;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+        }
+        .knowledge-graph {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 250px;
+            overflow: hidden;
+            border: 1px dashed #4a5568;
+            border-radius: 8px;
+        }
+        .kg-node {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background-color: #4299e1;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            font-size: 0.75rem;
+            color: white;
+            padding: 0.5rem;
+            border: 2px solid transparent;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: all 0.3s ease-in-out;
+            cursor: pointer;
+        }
+        .kg-node.selected {
+            border-color: #f6ad55;
+            transform: scale(1.1);
+        }
+        .kg-edge {
+            position: absolute;
+            background-color: #a0aec0;
+            height: 2px;
+            transform-origin: 0 0;
+            opacity: 0.5;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border-left-color: #fff;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="p-6">
+    <div class="container mx-auto flex flex-col h-full bg-gray-900 rounded-2xl shadow-lg p-6">
+        <h1 class="text-3xl font-bold text-center mb-6 text-indigo-400">Major Incident Manager</h1>
+        <div class="flex flex-1 flex-col md:flex-row space-y-6 md:space-y-0 md:space-x-6">
+
+            <!-- Conversation Panel -->
+            <div class="flex-1 flex flex-col bg-gray-800 rounded-xl p-4 shadow-inner">
+                <div id="chat-messages" class="chat-area flex-1 p-4 mb-4"></div>
+                <div class="flex items-center space-x-2">
+                    <input type="text" id="user-input" placeholder="Type your response here..." class="flex-1 bg-gray-700 text-gray-200 border border-gray-600 rounded-lg p-3 focus:outline-none focus:border-indigo-500 transition-colors duration-200" disabled>
+                    <button id="send-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50" disabled>Send</button>
+                    <button id="voice-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">Speak</button>
+                    <button id="bridge-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50" disabled>Join Bridge</button>
+                </div>
+            </div>
+
+            <!-- Data & Analysis Panel -->
+            <div class="flex-1 flex flex-col bg-gray-800 rounded-xl p-6 shadow-inner">
+                <div id="data-panel" class="flex-1 overflow-y-auto">
+                    <!-- CMDB and Knowledge Graph will be injected here -->
+                    <div id="cmdb-data" class="hidden"></div>
+                    <div id="final-report" class="hidden"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const voiceBtn = document.getElementById('voice-btn');
+        const bridgeBtn = document.getElementById('bridge-btn');
+        const dataPanel = document.getElementById('data-panel');
+
+        let conversationState = 'initial';
+        let associatedCIs = [];
+
+        // CMDB data to ground the model
+        const CMDB = [
+            { id: 'app-a', type: 'Application', name: 'Web Storefront', associated_cis: ['lb-a', 'web-s-1', 'web-s-2', 'pg-db-a', 'data-int-svc', 'pay-api'] },
+            { id: 'app-b', type: 'Application', name: 'SAP S/4HANA', associated_cis: ['sap-as-1', 'hana-db'] },
+            { id: 'app-c', type: 'Application', name: 'Salesforce CRM', associated_cis: ['sf-int-s', 'data-int-svc'] },
+            { id: 'app-d', type: 'Application', name: 'Legacy Mainframe', associated_cis: ['mf-z'] },
+            { id: 'data-int-svc', type: 'Application', name: 'Data Integration Service', associated_cis: ['sap-sf-if', 'sf-int-s', 'web-s-1'] },
+            { id: 'app-f', type: 'Application', name: 'Billing Microservice', associated_cis: ['bill-host', 'mysql-db'] },
+            { id: 'app-g', type: 'Application', name: 'Reporting Dashboard', associated_cis: ['report-host', 'pg-db-a'] },
+
+            { id: 'lb-a', type: 'Load Balancer', name: 'NGINX Load Balancer' },
+            { id: 'web-s-1', type: 'Server', name: 'Web Server 1' },
+            { id: 'web-s-2', type: 'Server', name: 'Web Server 2' },
+            { id: 'web-s-3', 'type': 'Server', name: 'Web Server 3' },
+
+            { id: 'pg-db-a', type: 'Database', name: 'PostgreSQL DB A' },
+            { id: 'hana-db', type: 'Database', name: 'SAP HANA DB' },
+            { id: 'mysql-db', type: 'Database', name: 'MySQL DB B' },
+            
+            { id: 'sap-as-1', type: 'Server', name: 'SAP Application Server' },
+            { id: 'sf-int-s', type: 'Server', name: 'Salesforce Integration Server' },
+            { id: 'mf-z', type: 'Server', name: 'Mainframe Host Z' },
+            { id: 'bill-host', type: 'Server', name: 'Billing Service Host' },
+            { id: 'report-host', type: 'Server', name: 'Reporting Host' },
+            
+            { id: 'sap-sf-if', type: 'Interface', name: 'SAP-Salesforce Interface' },
+            { id: 'pay-api', type: 'API', name: 'Payment Gateway API' },
+            { id: 'mon-agent-a', type: 'Agent', name: 'Monitoring Agent A' },
+            { id: 'net-firewall', type: 'Network', name: 'Network Firewall' },
+            { id: 'dns-svc', type: 'Service', name: 'DNS Service' },
+            { id: 'email-svc', type: 'Service', name: 'Email Notification Service' },
+        ];
+
+        // Simulated Logs to ground the model
+        const simulatedLogs = `
+            2025-09-03 22:15:01 [ERROR] [Web Storefront] - Failed to submit order, dependency timeout.
+            2025-09-03 22:15:02 [ERROR] [Data Integration Service] - Connection to SAP system failed.
+            2025-09-03 22:15:03 [WARN] [SAP HANA DB] - High volume of failed login attempts from 'Data Integration Service'.
+            2025-09-03 22:15:04 [INFO] [Web Server 1] - Health check passed.
+            2025-09-03 22:15:05 [INFO] [Web Server 2] - Health check passed.
+            2025-09-03 22:15:06 [ERROR] [SAP-Salesforce Interface] - SSL Handshake failed, certificate expired.
+            2025-09-03 22:15:07 [ERROR] [Data Integration Service] - Unable to submit data to SAP.
+        `;
+
+        // --- Voice & UI Utilities ---
+        const synth = window.speechSynthesis;
+        const utterance = new SpeechSynthesisUtterance();
+        utterance.lang = 'en-US';
+
+        const speak = (text) => {
+            if (synth.speaking) {
+                synth.cancel();
+            }
+            utterance.text = text;
+            synth.speak(utterance);
+        };
+
+        const startSpeechRecognition = () => {
+            if (!('webkitSpeechRecognition' in window)) {
+                console.error('Your browser does not support Speech Recognition. Please use Google Chrome.');
+                return;
+            }
+            const speechRecognition = new webkitSpeechRecognition();
+            speechRecognition.continuous = false;
+            speechRecognition.interimResults = false;
+            speechRecognition.lang = 'en-US';
+
+            speechRecognition.onstart = () => {
+                voiceBtn.textContent = 'Listening...';
+                voiceBtn.classList.add('bg-red-600');
+            };
+
+            speechRecognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                userInput.value = transcript;
+                voiceBtn.textContent = 'Speak';
+                voiceBtn.classList.remove('bg-red-600');
+                handleUserInput();
+            };
+
+            speechRecognition.onerror = (event) => {
+                console.error('Speech recognition error', event);
+                voiceBtn.textContent = 'Speak';
+                voiceBtn.classList.remove('bg-red-600');
+            };
+
+            speechRecognition.onend = () => {
+                voiceBtn.textContent = 'Speak';
+                voiceBtn.classList.remove('bg-red-600');
+            };
+
+            speechRecognition.start();
+        };
+        voiceBtn.addEventListener('click', startSpeechRecognition);
+
+        const addMessage = (sender, text) => {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender === 'user' ? 'user' : 'agent'}`;
+            if (sender !== 'user') {
+                const agentName = document.createElement('div');
+                agentName.className = 'agent-name';
+                agentName.textContent = sender;
+                messageDiv.appendChild(agentName);
+            }
+            const textContent = document.createElement('p');
+            textContent.innerHTML = text.replace(/\n/g, '<br>');
+            messageDiv.appendChild(textContent);
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            if (sender !== 'user') {
+                speak(text);
+            }
+        };
+
+        const showLoading = () => {
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message agent';
+            loadingDiv.innerHTML = `<div class="spinner"></div>`;
+            chatMessages.appendChild(loadingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        };
+
+        const hideLoading = () => {
+            const lastMessage = chatMessages.lastElementChild;
+            if (lastMessage && lastMessage.querySelector('.spinner')) {
+                chatMessages.removeChild(lastMessage);
+            }
+        };
+        
+        const initializeUI = () => {
+            const cmdbPanel = document.getElementById('cmdb-data');
+            cmdbPanel.innerHTML = `
+                <div class="card">
+                    <h2 class="text-xl font-bold mb-4">CMDB List</h2>
+                    <p class="mb-4 text-gray-400">Below is a list of all configured applications. Please select one to begin the incident flow.</p>
+                    <div class="overflow-x-auto mb-6 rounded-md">
+                        <table class="w-full text-left table-auto border-collapse">
+                            <thead>
+                                <tr class="bg-gray-700">
+                                    <th class="p-3">CI ID</th>
+                                    <th class="p-3">Type</th>
+                                    <th class="p-3">Name</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${CMDB.filter(ci => ci.type === 'Application').map(ci => `
+                                    <tr class="border-t border-gray-600 hover:bg-gray-700 transition-colors duration-200">
+                                        <td class="p-3">${ci.id}</td>
+                                        <td class="p-3">${ci.type}</td>
+                                        <td class="p-3">${ci.name}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+            cmdbPanel.classList.remove('hidden');
+        };
+
+        // Function to draw the knowledge graph based on returned data
+        const drawKnowledgeGraph = (ciData) => {
+            const graphContainer = document.getElementById('knowledge-graph-container');
+            if (!graphContainer) {
+                console.error("Knowledge graph container not found.");
+                return;
+            }
+            graphContainer.innerHTML = ''; // Clear previous graph
+
+            const appCI = ciData.find(ci => ci.is_primary);
+            if (!appCI) return;
+
+            const allNodes = ciData;
+            
+            allNodes.forEach((node, index) => {
+                const nodeDiv = document.createElement('div');
+                nodeDiv.className = `kg-node`;
+                if (node.is_primary) {
+                    nodeDiv.classList.add('selected');
+                }
+                nodeDiv.textContent = node.name;
+                const angle = (index / allNodes.length) * 2 * Math.PI;
+                const radius = 100;
+                nodeDiv.style.top = `calc(50% + ${radius * Math.sin(angle)}px - 40px)`;
+                nodeDiv.style.left = `calc(50% + ${radius * Math.cos(angle)}px - 40px)`;
+                graphContainer.appendChild(nodeDiv);
+            });
+
+            // Wait for nodes to be in the DOM to get their position
+            setTimeout(() => {
+                const primaryNode = document.querySelector('.kg-node.selected');
+                if (!primaryNode) return;
+                const primaryRect = primaryNode.getBoundingClientRect();
+
+                document.querySelectorAll('.kg-node:not(.selected)').forEach(nodeDiv => {
+                    const nodeRect = nodeDiv.getBoundingClientRect();
+                    const edge = document.createElement('div');
+                    edge.className = `kg-edge`;
+                    const x1 = primaryRect.left + primaryRect.width / 2;
+                    const y1 = primaryRect.top + primaryRect.height / 2;
+                    const x2 = nodeRect.left + nodeRect.width / 2;
+                    const y2 = nodeRect.top + nodeRect.height / 2;
+                    
+                    const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+                    const angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+
+                    edge.style.width = `${length}px`;
+                    edge.style.transform = `rotate(${angleDeg}deg)`;
+                    edge.style.top = `${y1}px`;
+                    edge.style.left = `${x1}px`;
+                    graphContainer.appendChild(edge);
+                });
+            }, 50); // Small delay to allow DOM to render
+        };
+
+        // --- Core Application Logic ---
+        const handleUserInput = async () => {
+            const userText = userInput.value.trim();
+            if (!userText) return;
+
+            addMessage('user', userText);
+            userInput.value = '';
+            
+            showLoading();
+
+            try {
+                // Fetch the response from the Streamlit backend
+                const response = await fetch(`/?chat=${encodeURIComponent(userText)}&state=${encodeURIComponent(conversationState)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Backend Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                const agentResponse = data.response;
+                const agentNumber = agentResponse.match(/^Agent (\d):/)[1];
+                const cleanText = agentResponse.replace(/^Agent \d:/, '').trim();
+
+                hideLoading();
+                addMessage(`Agent ${agentNumber}`, cleanText);
+
+                if (agentNumber === '2') {
+                    const selectedApp = CMDB.find(ci => cleanText.includes(ci.name) && ci.type === 'Application');
+                    if (selectedApp) {
+                        const associatedCisData = CMDB.filter(ci => selectedApp.associated_cis.includes(ci.id) || ci.id === selectedApp.id).map(ci => ({ ...ci, is_primary: ci.id === selectedApp.id }));
+                        associatedCIs = associatedCisData;
+                        const cmdbPanel = document.getElementById('cmdb-data');
+                        cmdbPanel.innerHTML = `
+                            <div class="card">
+                                <h2 class="text-xl font-bold mb-4">CMDB Lookup</h2>
+                                <p class="mb-4 text-gray-400">Agent 2 has identified the following CIs associated with the application.</p>
+                                <div id="knowledge-graph-container" class="knowledge-graph"></div>
+                            </div>
+                        `;
+                        cmdbPanel.classList.remove('hidden');
+                        drawKnowledgeGraph(associatedCisData);
+                        bridgeBtn.disabled = false;
+                        conversationState = 'in_flow';
+                    }
+                } else if (agentNumber === '3') {
+                     const logPanel = document.getElementById('log-panel');
+                    if(logPanel) logPanel.remove();
+                    const newLogPanel = document.createElement('div');
+                    newLogPanel.id = 'log-panel';
+                    newLogPanel.className = 'card mt-6';
+                    newLogPanel.innerHTML = `
+                        <h2 class="text-xl font-bold mb-4">Log Analysis</h2>
+                        <p class="mb-4 text-gray-400">Agent 3 is logging into the servers and extracting the last 24 hours of logs...</p>
+                        <pre id="log-dump" class="bg-gray-700 p-4 rounded-lg overflow-x-auto text-sm text-gray-200">${simulatedLogs.trim()}</pre>
+                    `;
+                    dataPanel.appendChild(newLogPanel);
+                    conversationState = 'analysis_done';
+                } else if (agentNumber === '4') {
+                     const reportPanel = document.getElementById('final-report');
+                    reportPanel.innerHTML = `
+                        <div class="card mt-6">
+                            <h2 class="text-xl font-bold mb-4">Root Cause Analysis</h2>
+                            <p class="text-gray-400">${cleanText}</p>
+                        </div>
+                    `;
+                    reportPanel.classList.remove('hidden');
+                    userInput.disabled = true;
+                    sendBtn.disabled = true;
+                    conversationState = 'completed';
+                }
+            } catch (error) {
+                hideLoading();
+                addMessage('Agent 1', `An error occurred: ${error.message}. Please try again.`);
+                console.error('API Error:', error);
+            }
+        };
+
+        const joinBridgeCall = () => {
+            bridgeBtn.disabled = true;
+            addMessage('Agent 1', 'Joining the bridge call now...');
+            showLoading();
+            setTimeout(() => {
+                hideLoading();
+                addMessage('Agent 1', 'You have successfully joined the bridge call. The core team is ready. Please proceed with the next step.');
+                addMessage('Agent 1', 'Feel free to type "run log analysis" to continue the incident flow.');
+                conversationState = 'joined_bridge';
+            }, 2000);
+        };
+        
+        sendBtn.addEventListener('click', handleUserInput);
+        userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                handleUserInput();
+            }
+        });
+        bridgeBtn.addEventListener('click', joinBridgeCall);
+
+        // Initial launch
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeUI();
+            addMessage('Agent 1', 'Welcome, this is the Major Incident Manager bridge. I\'m Agent 1, the incident triage agent. Please tell me which application is having issues. Feel free to ask me questions at any time.');
+            userInput.disabled = false;
+            sendBtn.disabled = false;
+            conversationState = 'app_selection';
+        });
+
+    </script>
+</body>
+</html>
